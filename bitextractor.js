@@ -39,11 +39,10 @@ class BitExtractor {
 
 	};
 
-
 	_bin(data) {
 		var bin = data.toString(2)
 		return bin.padStart(Math.ceil(bin.length / 8) * 8, '0')
-	}
+	};
 
 	_verify(data, base) {
 		data = data.toString().toLowerCase();
@@ -56,7 +55,7 @@ class BitExtractor {
 
 	_verifyRadix(radix) {
 		return radix >= 2 && radix <= 36;
-	}
+	};
 
 	_toBigInt(value, radix) {
 
