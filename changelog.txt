@@ -5,6 +5,23 @@
 - added `session.locale = userdata => userdata.language` to built-in auth mechanism
 - added `write` functionality to the `BitExtractor` class by [Peter Stolc](https://github.com/a50397)
 - fixed error handling in the FlowStream
+- fixed refreshing of `NOW` variable in the FlowStream
+- fixed calling end-response callback in the `res.$file()` method
+- fixed assigning values in Macros
+- added private variables to Macros in the form `#variable="VALUE"`
+- added comments to Macros in the form `// comment`
+- fixed auto-closing of WebSocket
+- fixed removing of API routes
+- added `controller.jsonstring(str, [headers])` method
+- added `res.jsonstring(str)` method
+- added new command `CMD('importbuild', 'URL address', [callback(err)])` method for importing Total.js Builds
+- extended `NEWEXTENSION()` by adding support for `html` type in the form `<script total> ... <file name="index.html"> ...`
+- added auto-handling files in extensions in the form `/-extension_name/filename`
+- extended plugins by adding support for `html` type in the form `<script total> ... <file name="index.html"> ...`
+- improved Multipart parser
+- updated Tangular version
+- fixed `--minify` argument in the Total4 command-line utility
+- extended `DEF.onAudit(name, data, [$])` by adding `$` argument
 
 ========================
 0.0.56

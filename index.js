@@ -97,8 +97,8 @@ function querybuilderwrapper(fn_name) {
 
 	var db = require('./querybuilder');
 
-	global.DB = function(conn) {
-		return db.make(conn);
+	global.DB = function() {
+		return new db.Controller();
 	};
 
 	global.NEWDB = function(name, callback) {
@@ -3347,7 +3347,9 @@ global.ROUTE = function(url, funcExecute, flags, length, language) {
 
 	var r = F.routes.all[mypath];
 	if (r) {
-		if (r.isAPI) {
+		if (r.remove) {
+			r.remove(!isremoveonly);
+		} else {
 			if (F.routes.api[r.url])
 				delete F.routes.api[r.url][r.name];
 			if (Object.keys(F.routes.api[r.url]).length === 0) {
@@ -3360,8 +3362,7 @@ global.ROUTE = function(url, funcExecute, flags, length, language) {
 				}
 			}
 			delete F.routes.all[mypath];
-		} else
-			r.remove(!isremoveonly);
+		}
 	}
 
 	if (isremoveonly)
@@ -4091,7 +4092,8 @@ global.ROUTE = function(url, funcExecute, flags, length, language) {
 			F.routes.web.push(r);
 			// Appends cors route
 			isCORS && CORS(urlcache, corsflags);
-		}
+		} else
+			instance.isAPI = true;
 	}
 
 	F.routes.all[mypath] = instance;
@@ -5778,6 +5780,12 @@ F.$load = function(types, targetdirectory, callback) {
 
 				items.wait(function(plugin, next) {
 
+					if (plugin.indexOf('.html') !== -1) {
+						dependencies.push(next => install('plugin', plugin.replace(/\.html$/g, ''), Path.join(dir, plugin), next));
+						next();
+						return;
+					}
+
 					dependencies.push(next => install('plugin', plugin, Path.join(dir, plugin, 'index.js'), next));
 
 					var path = PATH.root('plugins/' + plugin + CONF.directory_definitions);
@@ -5937,36 +5945,44 @@ function install_build(name, filename, next) {
 		return;
 	}
 
-	var meta = F.builds[name] = { filename: filename };
 	var build = Fs.readFileSync(filename).toString('utf8').parseJSON();
 	if (build && build.compiled) {
-
-		var code;
-
-		meta.id = build.id || (build.name ? HASH(build.name).toString(36) : GUID(10));
-		meta.name = build.name;
-		meta.icon = build.icon;
-		meta.url = build.url;
-		meta.color = build.color;
-		meta.summary = build.summary;
-		meta.uninstall = uninstall_plugin;
-
-		if ((/^base64\s/i).test(build.compiled))
-			code = decodeURIComponent(Buffer.from(build.compiled.substring(build.compiled.indexOf(' ') + 1).trim(), 'base64'));
-		else if ((/^hex\s/i).test(build.compiled))
-			code = Buffer.from(build.compiled.substring(build.compiled.indexOf(' ') + 1).trim(), 'hex');
-		else
-			code = build.compiled.trim();
-
-		var tmp = PATH.temp(name + '.build.js');
-		Fs.writeFileSync(tmp, code);
-		meta.module = require(tmp);
-
-		if (!F.buildserrorhandling)
-			F.buildserrorhandling = code.indexOf('//@build') !== -1;
+		var meta = install_build_object(name, build);
+		if (meta)
+			meta.filename = filename;
 	}
 
 	internal_next(next);
+}
+
+function install_build_object(name, build) {
+
+	var code;
+	var meta = {};
+	meta.id = build.id || (build.name ? HASH(build.name).toString(36) : GUID(10));
+	meta.name = build.name;
+	meta.icon = build.icon;
+	meta.url = build.url;
+	meta.color = build.color;
+	meta.summary = build.summary;
+	meta.uninstall = uninstall_plugin;
+	F.builds[name] = meta;
+
+	if ((/^base64\s/i).test(build.compiled))
+		code = decodeURIComponent(Buffer.from(build.compiled.substring(build.compiled.indexOf(' ') + 1).trim(), 'base64'));
+	else if ((/^hex\s/i).test(build.compiled))
+		code = Buffer.from(build.compiled.substring(build.compiled.indexOf(' ') + 1).trim(), 'hex');
+	else
+		code = build.compiled.trim();
+
+	var tmp = PATH.temp(name + '.build.js');
+	Fs.writeFileSync(tmp, code);
+	meta.module = require(tmp);
+
+	if (!F.buildserrorhandling)
+		F.buildserrorhandling = code.indexOf('//@build') !== -1;
+
+	return meta;
 }
 
 function uninstall_plugin() {
@@ -6079,6 +6095,37 @@ function install(type, name, filename, next) {
 	}
 
 	var key = type + '_' + name;
+	var files;
+
+	if (type === 'plugin' && filename.indexOf('.html') !== -1) {
+
+		var code = F.Fs.readFileSync(filename).toString('utf8');
+		var index = 0;
+		var fileid = filename.makeid();
+		files = {};
+
+		while (true) {
+			index = code.indexOf('<file ', index);
+			if (index === -1) {
+				break;
+			} else {
+				var tmp = code.indexOf('>', index + 8);
+				var end = code.indexOf('</file>', tmp);
+				var tmpfilename = code.substring(index + 8, tmp).trim();
+				var body = code.substring(tmp + 1, end).trim();
+				tmp = tmpfilename.indexOf('"');
+				tmpfilename = tmpfilename.substring(tmp + 1, tmpfilename.lastIndexOf('"'));
+				files[tmpfilename] = PATH.tmp('plugin_' + fileid + '_' + tmpfilename);
+				F.Fs.writeFileSync(files[tmpfilename], body);
+				code = code.substring(0, index) + code.substring(end + 9);
+			}
+		}
+
+		var parsed = code.parseComponent({ be: '<script total>' });
+		code = parsed.be || '';
+		filename = PATH.tmp('plugin_' + fileid + '.js');
+		F.Fs.writeFileSync(filename, cleancodetabs(code));
+	}
 
 	var m = require(filename);
 	var opt = CONF[key];
@@ -6095,6 +6142,7 @@ function install(type, name, filename, next) {
 		case 'plugin':
 			m.id = name;
 			F.plugins[name] = m;
+			m.files = files;
 			break;
 		case 'module':
 			m.id = name;
@@ -6335,7 +6383,19 @@ DEF.onMapping = function(url, def, ispublic, encode) {
 		case '_':
 			var index = tmp.indexOf('/', 2);
 			var name = tmp.substring(2, index);
-			return F.plugins[name] ? PATH.root('/plugins/' + name + '/public/' + tmp.substring(index + 1)) : null;
+			var filename = tmp.substring(index + 1);
+			if (F.plugins[name])
+				return F.plugins[name].files ? F.plugins[name].files[filename] : PATH.root('/plugins/' + name + '/public/' + filename);
+			break;
+		case '-':
+			var index = tmp.indexOf('/', 2);
+			var name = tmp.substring(2, index);
+			var filename = tmp.substring(index + 1);
+			for (var ext of F.extensions) {
+				if (ext.id === name)
+					return ext.files[filename];
+			}
+			break;
 	}
 
 	if (F.routes.mapping[url])
@@ -6648,7 +6708,7 @@ global.AUDIT = function(name, $, message, type) {
 		data.app = CONF.url || CONF.name;
 		TotalAPI('logger', data, ERROR('totalapi'));
 	} else
-		DEF.onAudit(name, data);
+		DEF.onAudit(name, data, $);
 };
 
 global.LOGGER = function() {
@@ -11163,6 +11223,7 @@ FrameworkRouteProto.remove = function(nosort) {
 			index = F.routes.web.indexOf(self.route);
 
 		if (index !== -1) {
+
 			tmp = F.routes.web[index];
 			if (tmp.apiname) {
 				var api = F.routes.api[tmp.apiname];
@@ -11182,12 +11243,33 @@ FrameworkRouteProto.remove = function(nosort) {
 				}
 
 			} else {
+
 				delete F.routes.all[tmp.path];
 				F.routes.web.splice(index, 1);
 			}
 
 			if (!nosort)
 				F.routes_sort();
+
+		} else if (self.isAPI) {
+
+			for (var key in F.routes.api) {
+				tmp = F.routes.api[key];
+				for (var key2 in tmp) {
+					if (tmp[key2].path === self.route.path)
+						delete tmp[key2];
+				}
+			}
+
+			for (var key in F.routes.all) {
+				tmp = F.routes.all[key];
+				if (tmp === self)
+					delete F.routes.all[key];
+			}
+
+			if (!nosort)
+				F.routes_sort();
+
 		}
 	}
 };
@@ -13772,7 +13854,6 @@ ControllerProto.json = function(obj, headers, beautify, replacer) {
 	// Checks the HEAD method
 	if (self.req.method === 'HEAD') {
 		res.options.body = EMPTYBUFFER;
-		res.options.type = CT_JSON;
 		res.$text();
 		F.stats.response.json++;
 		return self;
@@ -13818,6 +13899,30 @@ ControllerProto.json = function(obj, headers, beautify, replacer) {
 	res.options.body = obj == null ? 'null' : obj;
 	res.$text();
 	self.precache && self.precache(obj, res.options.type, headers);
+	return self;
+};
+
+ControllerProto.jsonstring = function(str, headers) {
+
+	var self = this;
+	var res = self.res;
+
+	res.options.code = self.status || 200;
+	res.options.type = CT_JSON;
+	res.options.headers = headers;
+
+	F.stats.response.json++;
+
+	if (self.req.method === 'HEAD') {
+		res.options.body = EMPTYBUFFER;
+		res.$text();
+	} else {
+		res.options.compress = str.length > 4096;
+		res.options.body = str;
+		res.$text();
+		self.precache && self.precache(str, res.options.type, headers);
+	}
+
 	return self;
 };
 
@@ -15324,7 +15429,6 @@ WebSocketProto.destroy = function() {
  * @param {Function} callback
  * @return {WebSocket]
  */
-
 function wsdestroy_open() {
 	var self = this;
 	if (self.$autocloseid) {
@@ -15334,6 +15438,13 @@ function wsdestroy_open() {
 }
 
 function wsdestroy_close(self) {
+
+	// Checks again online state
+	if (self.online) {
+		self.$autocloseid = null;
+		return;
+	}
+
 	if (self.$autodestroy) {
 		for (var fn of self.$autodestroy)
 			fn.call(self);
@@ -17424,6 +17535,15 @@ function extend_response(PROTO) {
 		return res.$text();
 	};
 
+	PROTO.jsonstring = function(str) {
+		var res = this;
+		F.stats.response.json++;
+		res.options.body = str;
+		res.options.compress = res.options.body.length > 4096;
+		res.options.type = CT_JSON;
+		return res.$text();
+	};
+
 	const SECURITYTXT = { '/security.txt': 1, '/.well-known/security.txt': 1 };
 
 	PROTO.continue = function(callback) {
@@ -17844,11 +17964,15 @@ function extend_response(PROTO) {
 		F.stats.response.stream++;
 		req.bodydata = null;
 
+		var finish = function() {
+			framework_internal.destroyStream(options.stream);
+			response_end(res);
+		};
+
 		if (req.method === 'HEAD') {
 			res.writeHead(options.code || 200, headers);
 			res.end();
-			options.stream && framework_internal.onFinished(res, () => framework_internal.destroyStream(options.stream));
-			response_end(res);
+			options.stream && framework_internal.onFinished(res, finish);
 			return res;
 		}
 
@@ -17856,14 +17980,13 @@ function extend_response(PROTO) {
 			res.writeHead(options.code || 200, headers);
 			res.on('error', () => options.stream.close());
 			options.stream.pipe(Zlib.createGzip(GZIPSTREAM)).pipe(res).on('data', countuploadstats);
-			framework_internal.onFinished(res, () => framework_internal.destroyStream(options.stream));
+			framework_internal.onFinished(res, finish);
 		} else {
 			res.writeHead(options.code || 200, headers);
-			framework_internal.onFinished(res, () => framework_internal.destroyStream(options.stream));
+			framework_internal.onFinished(res, finish);
 			options.stream.pipe(res).on('data', countuploadstats);
 		}
 
-		response_end(res);
 		return res;
 	};
 
@@ -18175,9 +18298,9 @@ function $file_nocompress(stream, next, res) {
 	framework_internal.onFinished(res, function() {
 		next();
 		framework_internal.destroyStream(stream);
+		response_end(res);
 	});
 
-	response_end(res);
 }
 
 function $file_range(name, range, headers, res) {
@@ -18226,10 +18349,10 @@ function $file_range(name, range, headers, res) {
 function $file_range_callback(stream, next, res) {
 	framework_internal.onFinished(res, function() {
 		framework_internal.destroyStream(stream);
+		response_end(res);
 		next();
 	});
 	stream.pipe(res).on('data', countuploadstats);
-	response_end(res);
 }
 
 function $image_nocache(res) {
@@ -18395,8 +18518,7 @@ function response_end(res) {
 	res.req.clear(true);
 	res.req.bodydata = null;
 
-	if (res.controller)
-		res.req.$total_success();
+	res.controller && res.req.$total_success();
 
 	if (res.options.callback) {
 		res.options.callback();
@@ -19418,15 +19540,51 @@ global.NEWEXTENSION = function(code, callback, extend) {
 		return;
 	}
 
+	var files = {};
+
+	if (code.indexOf('<script total') !== -1) {
+
+		var index = 0;
+
+		while (true) {
+			index = code.indexOf('<file ', index);
+			if (index === -1) {
+				break;
+			} else {
+				var tmp = code.indexOf('>', index + 8);
+				var end = code.indexOf('</file>', tmp);
+				var name = code.substring(index + 8, tmp).trim();
+				var body = code.substring(tmp + 1, end).trim();
+				tmp = name.indexOf('"');
+				name = name.substring(tmp + 1, name.lastIndexOf('"'));
+				files[name] = body;
+				code = code.substring(0, index) + code.substring(end + 9);
+			}
+		}
+		var parsed = code.parseComponent({ be: '<script total>' });
+		code = cleancodetabs(parsed.be || '');
+	}
+
 	var obj = {};
 
 	try {
+
 		new Function('exports', code)(obj);
+		obj.files = files;
 		extend && extend(obj);
+
 		if (!obj.id) {
 			var id = obj.name || code;
 			obj.id = HASH(id).toString(36);
 		}
+
+		for (var key in obj.files) {
+			var path = PATH.tmp(obj.id.makeid() + '_' + key);
+			var body = obj.files[key];
+			obj.files[key] = path;
+			F.Fs.writeFile(path, body, ERROR('Extensions: ' + obj.id));
+		}
+
 	} catch (e) {
 		callback && callback(new ErrorBuilder().push(e));
 		return;
@@ -19444,6 +19602,10 @@ global.NEWEXTENSION = function(code, callback, extend) {
 	CURRENT_OWNER = 'extension' + obj.id;
 
 	obj.remove = function() {
+
+		for (var key in files)
+			F.Fs.unlink(files[key], NOOP);
+
 		obj.uninstall && obj.uninstall();
 		delete obj.remove;
 		delete obj.uninstall;
@@ -19587,6 +19749,67 @@ NEWCOMMAND('clear_owner', function(owner) {
 
 	F.routes_sort();
 });
+
+NEWCOMMAND('import_build', function(url, callback) {
+	RESTBuilder.GET(url).exec(function(err, response) {
+		if (err) {
+			callback && callback(err);
+			return;
+		}
+
+		if (!response.compiled) {
+			callback && callback('Invalid content');
+			return;
+		}
+
+		try {
+			install_build_object(U.getName(url) || GUID(10), response);
+			callback && callback();
+		} catch (e) {
+			callback && callback(e);
+		}
+	});
+});
+
+function cleancodetabs(val) {
+
+	var allowed = { '\n': 1, '\t': 1 };
+	var count = 0;
+
+	for (var i = 0; i < val.length; i++) {
+		var c = val[i];
+		if (allowed[c]) {
+			count = 0;
+			for (var j = i; j < val.length; j++) {
+				if (val[j] === '\t')
+					count++;
+				else
+					break;
+			}
+			if (count)
+				break;
+		} else
+			break;
+	}
+
+	if (!count)
+		return val;
+
+	var start = '';
+	for (var i = 0; i < count; i++)
+		start += '\t';
+
+	var lines = val.split('\n');
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		if (line.substring(0, count) === start) {
+			line = line.substring(count);
+			lines[i] = line;
+		}
+	}
+
+	return lines.join('\n');
+};
 
 // Because of controller prototypes
 // It's used in VIEW() and VIEWCOMPILE()
